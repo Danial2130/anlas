@@ -19,7 +19,7 @@ import {
   orderBy,
   increment
 } from 'firebase/firestore';
-import { Bell, Trophy, LogOut, Sun, Moon, User, Chrome } from 'lucide-react';
+import { Bell, Trophy, LogOut, Sun, Moon, User, Chrome, AlertCircle, CheckCircle2 } from 'lucide-react';
 
 // --- KONFIGURASI FIREBASE ANLAS ---
 const firebaseConfig = {
@@ -31,7 +31,6 @@ const firebaseConfig = {
   appId: "1:8438845826:web:688c98a7d5be2c9ca07f9b"
 };
 
-// Inisialisasi Firebase
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
@@ -47,8 +46,9 @@ export default function App() {
   const [alarmTriggered, setAlarmTriggered] = useState(false);
   const [leaderboard, setLeaderboard] = useState([]);
   const [myProfile, setMyProfile] = useState(null);
+  const [authError, setAuthError] = useState(null);
 
-  // 1. Pantau status Login
+  // Auth Listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       setUser(currentUser);
@@ -57,25 +57,19 @@ export default function App() {
     return () => unsubscribe();
   }, []);
 
-  // 2. Sinkronisasi Data Firestore (Leaderboard & Profil)
+  // Firestore Sync
   useEffect(() => {
     if (!user) return;
-
-    // Path Koleksi sesuai aturan main Firestore Environment
-    const usersCol = collection(db, 'artifacts', appId, 'public', 'data', 'users');
     
-    // Ambil Leaderboard secara real-time
+    const usersCol = collection(db, 'artifacts', appId, 'public', 'data', 'users');
     const q = query(usersCol);
+    
     const unsubBoard = onSnapshot(q, (snapshot) => {
       const players = [];
-      snapshot.forEach((doc) => {
-        players.push(doc.data());
-      });
-      // Sort berdasarkan streak di memori
+      snapshot.forEach((doc) => players.push(doc.data()));
       setLeaderboard(players.sort((a, b) => (b.streak || 0) - (a.streak || 0)));
-    }, (err) => console.error("Leaderboard Error:", err));
+    }, (error) => console.error("Leaderboard error:", error));
 
-    // Pantau profil saya sendiri
     const myDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
     const unsubProfile = onSnapshot(myDocRef, (snap) => {
       if (snap.exists()) setMyProfile(snap.data());
@@ -87,17 +81,16 @@ export default function App() {
     };
   }, [user]);
 
-  // 3. Logika Alarm
+  // Alarm Engine
   useEffect(() => {
     let interval;
     if (isMonitoring && targetTime && !alarmTriggered) {
       interval = setInterval(() => {
         const now = new Date();
         const currentTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-        
         if (currentTime === targetTime) {
           setAlarmTriggered(true);
-          updateStatus('🚨 SEDANG BERISIK!');
+          updateStatus('🚨 BERISIK!');
         }
       }, 1000);
     }
@@ -107,27 +100,26 @@ export default function App() {
   const updateStatus = async (statusText) => {
     if (!user) return;
     const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
-    await updateDoc(userRef, { 
-      status: statusText,
-      lastAction: serverTimestamp() 
-    }).catch(() => {});
+    await updateDoc(userRef, { status: statusText, lastAction: serverTimestamp() }).catch(() => {});
   };
 
   const login = async () => {
+    setAuthError(null);
     try {
       const result = await signInWithPopup(auth, googleProvider);
       const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', result.user.uid);
-      
-      // Simpan/Update data user saat login (Pastikan foto masuk)
       await setDoc(userRef, {
         uid: result.user.uid,
         name: result.user.displayName,
-        photo: result.user.photoURL || '', 
-        streak: result.user.uid === auth.currentUser?.uid ? (myProfile?.streak || 0) : 0,
+        photo: result.user.photoURL, 
+        streak: myProfile?.streak || 0,
         status: 'Online',
         lastAction: serverTimestamp()
       }, { merge: true });
-    } catch (e) { console.error(e); }
+    } catch (e) { 
+      console.error(e);
+      setAuthError("Gagal masuk. Periksa koneksi atau domain Firebase.");
+    }
   };
 
   const handleSuccess = async () => {
@@ -135,131 +127,172 @@ export default function App() {
     setAlarmTriggered(false);
     const userRef = doc(db, 'artifacts', appId, 'public', 'data', 'users', user.uid);
     await updateDoc(userRef, {
-      status: 'Berhasil Bangun! ✅',
+      status: 'Bangun Tepat Waktu! ✅',
       streak: increment(1),
       lastAction: serverTimestamp()
     });
     setActiveTab('leaderboard');
   };
 
+  // Helper Foto Profil Fixed
+  const getAvatar = (photoUrl, name) => {
+    if (photoUrl && photoUrl.length > 10) return photoUrl;
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(name || 'U')}&background=6366f1&color=fff`;
+  };
+
   if (loading) return (
     <div className="h-screen flex items-center justify-center bg-slate-50">
-      <div className="flex flex-col items-center gap-4">
-        <div className="w-12 h-12 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
-        <p className="font-bold text-slate-400 text-xs tracking-widest uppercase">Memuat Anlas...</p>
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-8 h-8 border-4 border-indigo-600 border-t-transparent rounded-full animate-spin"></div>
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Memuat...</p>
       </div>
     </div>
   );
 
   if (!user) {
     return (
-      <div className="min-h-screen bg-white flex flex-col items-center justify-center p-6 text-center">
-        <div className="bg-indigo-600 w-20 h-20 rounded-3xl flex items-center justify-center mb-6 shadow-2xl shadow-indigo-200">
-          <Bell size={40} className="text-white" />
+      <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center p-6 text-slate-900">
+        <div className="bg-white p-8 rounded-[32px] shadow-xl border border-slate-100 flex flex-col items-center text-center max-w-sm w-full">
+          <div className="bg-indigo-600 w-16 h-16 rounded-2xl flex items-center justify-center mb-6 shadow-lg shadow-indigo-100 rotate-3">
+            <Bell size={32} className="text-white -rotate-3" />
+          </div>
+          <h1 className="text-3xl font-black mb-2 tracking-tighter italic uppercase">Anlas<span className="text-indigo-600">.</span></h1>
+          <p className="text-slate-500 mb-8 text-xs font-medium px-4">Alarm sosial untuk membangun disiplin pagi bersama teman-temanmu.</p>
+          
+          {authError && (
+            <div className="mb-6 p-3 bg-red-50 rounded-xl flex items-start gap-2 text-left border border-red-100 w-full">
+              <AlertCircle size={14} className="text-red-500 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-bold text-red-600 leading-tight">{authError}</p>
+            </div>
+          )}
+
+          <button onClick={login} className="w-full flex items-center justify-center gap-3 bg-slate-900 text-white px-5 py-3.5 rounded-xl font-bold hover:bg-black transition-all active:scale-95 shadow-md">
+            <Chrome size={18} />
+            Lanjut dengan Google
+          </button>
         </div>
-        <h1 className="text-4xl font-black text-slate-900 mb-2 italic tracking-tighter">ANLAS.</h1>
-        <p className="text-slate-500 mb-8 max-w-[250px] leading-snug">Tunjukkan kedisiplinanmu dan pantau teman yang masih tidur.</p>
-        <button onClick={login} className="flex items-center gap-3 bg-slate-900 text-white px-8 py-4 rounded-2xl font-bold hover:bg-slate-800 transition-all shadow-xl active:scale-95">
-          <Chrome size={20} />
-          Masuk dengan Google
-        </button>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 p-4 font-sans text-slate-900">
-      <div className="max-w-md mx-auto">
-        <header className="flex justify-between items-center py-4 mb-4">
+    <div className="min-h-screen bg-slate-50 text-slate-900 pb-12">
+      <div className="max-w-md mx-auto px-5">
+        
+        {/* Header Fixed Photo */}
+        <header className="flex justify-between items-center py-6">
           <div>
-            <h1 className="text-2xl font-black text-indigo-600 italic leading-none">ANLAS</h1>
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">Anti Malas System</p>
+            <h1 className="text-xl font-black tracking-tighter italic uppercase">Anlas</h1>
+            <div className="flex items-center gap-1.5 mt-0.5 text-emerald-500">
+              <div className="w-1.5 h-1.5 rounded-full bg-current shadow-[0_0_5px_rgba(16,185,129,0.5)]"></div>
+              <p className="text-[8px] font-black uppercase tracking-widest opacity-80">Server Online</p>
+            </div>
           </div>
-          <div className="flex items-center gap-3 bg-white p-1 pr-3 rounded-2xl shadow-sm border border-slate-100">
+          <div className="flex items-center gap-3 bg-white p-1.5 pr-3 rounded-xl shadow-sm border border-slate-100">
             <img 
-              src={user.photoURL || `https://ui-avatars.com/api/?name=${user.displayName}`} 
-              className="w-8 h-8 rounded-xl object-cover border border-slate-100" 
-              alt="Profil"
-              onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${user.displayName}` }}
+              src={getAvatar(user.photoURL, user.displayName)} 
+              className="w-8 h-8 rounded-lg object-cover ring-2 ring-slate-50" 
+              alt="Me"
             />
-            <button onClick={() => signOut(auth)} className="text-slate-400 hover:text-red-500 transition-colors">
-              <LogOut size={18}/>
+            <button onClick={() => signOut(auth)} className="text-slate-300 hover:text-red-500 transition-colors p-1">
+              <LogOut size={16}/>
             </button>
           </div>
         </header>
 
-        <nav className="flex bg-white p-1 rounded-2xl shadow-sm mb-8 border border-slate-100">
-          <button onClick={() => setActiveTab('alarm')} className={`flex-1 py-3.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'alarm' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-400'}`}>Alarm</button>
-          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 py-3.5 rounded-xl font-bold text-sm transition-all ${activeTab === 'leaderboard' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100' : 'text-slate-400'}`}>Peringkat</button>
+        {/* Tab - Normal Size */}
+        <nav className="flex bg-slate-200/50 p-1 rounded-2xl mb-6 backdrop-blur-sm border border-slate-200/30">
+          <button onClick={() => setActiveTab('alarm')} className={`flex-1 py-2.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all ${activeTab === 'alarm' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>Alarm</button>
+          <button onClick={() => setActiveTab('leaderboard')} className={`flex-1 py-2.5 rounded-xl font-bold text-[11px] uppercase tracking-wider transition-all ${activeTab === 'leaderboard' ? 'bg-white text-indigo-600 shadow-sm' : 'text-slate-500'}`}>Peringkat</button>
         </nav>
 
         {activeTab === 'alarm' ? (
-          <div className={`bg-white p-10 rounded-[40px] shadow-xl text-center border-4 transition-all duration-500 ${alarmTriggered ? 'border-red-500 animate-pulse scale-[1.02]' : 'border-transparent'}`}>
-            <div className={`w-20 h-20 rounded-[30px] flex items-center justify-center mx-auto mb-8 transition-colors ${alarmTriggered ? 'bg-red-50 text-red-500' : 'bg-indigo-50 text-indigo-600'}`}>
-              {alarmTriggered ? <Bell size={40} /> : isMonitoring ? <Sun size={40} className="animate-spin-slow text-orange-400" /> : <Moon size={40} />}
+          <div className={`bg-white p-8 rounded-[40px] shadow-xl border-2 transition-all duration-500 ${alarmTriggered ? 'border-red-400 scale-[1.01] shadow-red-100' : 'border-white'}`}>
+            <div className={`w-20 h-20 rounded-3xl flex items-center justify-center mx-auto mb-6 transition-all ${alarmTriggered ? 'bg-red-500 text-white animate-bounce' : 'bg-indigo-50 text-indigo-600'}`}>
+              {alarmTriggered ? <Bell size={36} /> : isMonitoring ? <Sun size={36} className="animate-[spin_8s_linear_infinite]" /> : <Moon size={36} />}
             </div>
-            <h2 className="text-2xl font-black mb-1 uppercase tracking-tight italic">{alarmTriggered ? "BANGUN SEKARANG!" : isMonitoring ? "Sistem Menunggu..." : "Mau Bangun Jam?"}</h2>
-            <p className="text-slate-400 text-xs mb-8 font-medium italic">Streak saat ini: {myProfile?.streak || 0} Hari</p>
             
-            <input 
-              type="time" 
-              value={targetTime} 
-              disabled={isMonitoring} 
-              onChange={(e) => setTargetTime(e.target.value)} 
-              className="w-full p-4 bg-slate-50 rounded-3xl text-6xl font-black text-center mb-10 outline-none focus:ring-4 focus:ring-indigo-50 transition-all" 
-            />
+            <div className="mb-6 text-center">
+              <h2 className={`text-xl font-black mb-1 ${alarmTriggered ? 'text-red-600' : 'text-slate-900'}`}>
+                {alarmTriggered ? "BANGUN SEKARANG!" : isMonitoring ? "Monitor Aktif" : "Atur Alarm Pagi"}
+              </h2>
+              <span className="inline-block px-2.5 py-1 bg-slate-100 rounded-lg text-[9px] font-black text-slate-500 uppercase tracking-widest">
+                🔥 Streak: {myProfile?.streak || 0} Hari
+              </span>
+            </div>
+            
+            <div className="mb-8 relative">
+              <input 
+                type="time" 
+                value={targetTime} 
+                disabled={isMonitoring} 
+                onChange={(e) => setTargetTime(e.target.value)} 
+                className={`w-full bg-slate-50 rounded-3xl py-8 text-6xl font-black text-center outline-none border-2 transition-all ${isMonitoring ? 'border-transparent text-slate-200' : 'border-slate-100 focus:border-indigo-200 focus:bg-white text-slate-900'}`} 
+              />
+            </div>
             
             {alarmTriggered ? (
-              <button onClick={handleSuccess} className="w-full bg-emerald-500 text-white font-black py-6 rounded-3xl shadow-2xl shadow-emerald-200 text-xl active:scale-95 transition-transform">SAYA SUDAH BANGUN!</button>
+              <button onClick={handleSuccess} className="w-full bg-emerald-500 text-white font-black py-4 rounded-2xl shadow-lg shadow-emerald-100 text-sm active:scale-95 transition-all flex items-center justify-center gap-2">
+                <CheckCircle2 size={18} /> SAYA SUDAH BANGUN
+              </button>
             ) : (
               <button 
-                onClick={() => { setIsMonitoring(!isMonitoring); updateStatus(isMonitoring ? 'Online' : 'Siaga Bangun 😴'); }} 
+                onClick={() => { setIsMonitoring(!isMonitoring); updateStatus(isMonitoring ? 'Online' : 'Menunggu Pagi ⏳'); }} 
                 disabled={!targetTime} 
-                className={`w-full font-black py-5 rounded-3xl transition-all active:scale-95 shadow-lg ${isMonitoring ? 'bg-slate-200 text-slate-400' : 'bg-indigo-600 text-white shadow-indigo-100'}`}
+                className={`w-full font-black py-4 rounded-2xl text-[11px] uppercase tracking-[0.2em] transition-all active:scale-95 ${isMonitoring ? 'bg-red-50 text-red-500 hover:bg-red-100' : 'bg-slate-900 text-white hover:bg-black disabled:opacity-20'}`}
               >
-                {isMonitoring ? 'Batalkan Kontrak' : 'Mulai Kontrak'}
+                {isMonitoring ? 'Batalkan Kontrak' : 'Tanda Tangani Kontrak'}
               </button>
             )}
           </div>
         ) : (
-          <div className="bg-white p-8 rounded-[40px] shadow-xl border border-slate-50">
-             <div className="flex justify-between items-end mb-8">
-               <h3 className="font-black text-xl flex items-center gap-2 italic uppercase tracking-tighter">
-                 <Trophy size={28} className="text-yellow-500" /> Pejuang Subuh
-               </h3>
-               <span className="text-[10px] font-black bg-indigo-50 text-indigo-600 px-4 py-1.5 rounded-full uppercase tracking-widest">
-                 {leaderboard.length} Peserta
+          <div className="bg-white p-6 rounded-[32px] shadow-xl border border-slate-100">
+             <div className="flex justify-between items-center mb-6">
+               <div className="flex items-center gap-2.5">
+                 <div className="bg-amber-400 p-2 rounded-lg shadow-md shadow-amber-50">
+                   <Trophy size={18} className="text-white" />
+                 </div>
+                 <h3 className="font-black text-lg">Pejuang Subuh</h3>
+               </div>
+               <span className="text-[8px] font-black bg-indigo-50 text-indigo-500 px-2 py-1 rounded-md uppercase tracking-widest">
+                 {leaderboard.length} Anggota
                </span>
              </div>
 
-             <div className="space-y-4">
+             <div className="space-y-3">
                {leaderboard.map((p, i) => (
-                 <div key={p.uid} className={`flex items-center justify-between p-4 rounded-3xl transition-all ${p.uid === user.uid ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-100 scale-[1.02]' : 'bg-slate-50 border border-slate-100'}`}>
-                   <div className="flex items-center gap-4">
-                     <span className={`text-xs font-black w-4 ${p.uid === user.uid ? 'text-indigo-200' : 'text-slate-300'}`}>{i+1}</span>
-                     <img 
-                       src={p.photo || `https://ui-avatars.com/api/?name=${p.name}`} 
-                       className={`w-11 h-11 rounded-2xl border-2 object-cover ${p.uid === user.uid ? 'border-indigo-400' : 'border-white'}`} 
-                       alt={p.name} 
-                       onError={(e) => { e.target.src = `https://ui-avatars.com/api/?name=${p.name}` }}
-                     />
+                 <div key={p.uid} className={`flex items-center justify-between p-3.5 rounded-2xl transition-all border ${p.uid === user.uid ? 'bg-indigo-600 text-white border-indigo-500 shadow-lg shadow-indigo-100' : 'bg-slate-50 border-slate-100/50'}`}>
+                   <div className="flex items-center gap-3">
+                     <span className={`text-[10px] font-black w-3 text-center ${p.uid === user.uid ? 'text-indigo-200' : 'text-slate-300'}`}>{i+1}</span>
+                     <div className="relative">
+                       <img 
+                         src={getAvatar(p.photo, p.name)} 
+                         className={`w-10 h-10 rounded-xl object-cover shadow-sm ${p.uid === user.uid ? 'ring-2 ring-white/30' : 'border-2 border-white'}`} 
+                         alt={p.name}
+                       />
+                       {p.status?.includes('🚨') && <div className="absolute -top-1 -right-1 w-3 h-3 bg-red-500 rounded-full border-2 border-white animate-pulse"></div>}
+                     </div>
                      <div>
-                       <p className="text-sm font-black uppercase tracking-tight leading-none mb-1">{p.uid === user.uid ? 'Anda' : p.name?.split(' ')[0]}</p>
-                       <p className={`text-[9px] font-bold uppercase tracking-widest ${p.uid === user.uid ? 'text-indigo-200' : 'text-indigo-400'}`}>{p.status}</p>
+                       <p className="text-xs font-black tracking-tight mb-0.5 truncate max-w-[120px]">{p.uid === user.uid ? 'Anda' : (p.name || 'User')}</p>
+                       <p className={`text-[8px] font-bold uppercase tracking-wider opacity-70`}>{p.status || 'Offline'}</p>
                      </div>
                    </div>
                    <div className="text-right">
-                     <p className={`text-xl font-black leading-none ${p.uid === user.uid ? 'text-white' : 'text-indigo-600'}`}>{p.streak || 0}</p>
-                     <p className={`text-[8px] font-bold uppercase tracking-widest mt-1 ${p.uid === user.uid ? 'text-indigo-300' : 'text-slate-400'}`}>Streak</p>
+                     <div className="flex items-center justify-end gap-1">
+                        <span className="text-lg font-black italic">{p.streak || 0}</span>
+                        <Sun size={10} className={p.uid === user.uid ? 'text-indigo-200' : 'text-amber-400'} />
+                     </div>
+                     <p className="text-[7px] font-black uppercase tracking-widest opacity-50">Streak</p>
                    </div>
                  </div>
                ))}
-               {leaderboard.length === 0 && (
-                 <div className="py-20 text-center text-slate-300 italic text-sm">Belum ada pejuang bergabung...</div>
-               )}
              </div>
           </div>
         )}
+
+        <footer className="mt-8 text-center">
+          <p className="text-[8px] text-slate-400 font-bold uppercase tracking-[0.3em]">Anlas v1.0.3 • Localhost Build</p>
+        </footer>
       </div>
     </div>
   );
